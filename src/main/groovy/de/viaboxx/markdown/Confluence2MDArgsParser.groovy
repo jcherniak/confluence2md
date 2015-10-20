@@ -36,6 +36,7 @@ class Confluence2MDArgsParser {
     -maxHeaderDepth 1..n the maximum header depth that will be rendered as a header, deeper will only rendered as bold title (default: 5)
     -no-caching file caching disabled (default: enabled)
     +caching file caching enabled
+	-splitdir folder for split level documents (default: null, implying single file output)
 
     last parameter: the file to read (-m file) or the URL to get (-m url) or the pageId to start with (-m wiki)
     -? print for this help
@@ -110,6 +111,13 @@ class Confluence2MDArgsParser {
                     case "+RootPageTitle":
                         titleRootPage = Boolean.parseBoolean(args[++i])
                         break
+					case "-splitdir":
+						splitDir = new File(args[++i])
+						if (!splitDir.exists()) {
+							splitDir.mkdirs();
+						}
+
+						break
                 }
             }
             switch (format) {

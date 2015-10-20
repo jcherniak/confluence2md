@@ -31,12 +31,16 @@ class Confluence2MD extends ConfluenceParser implements Walker {
     protected boolean footnotes = true
 
     int maxHeaderDepth = 5 // docx does not support more!
+	int topLevelDepth = 1
 
     boolean runPlantUml = true
     boolean docHierarchy = true, newLine = true, blankLine = true, strong = false
     boolean titleTransformation = true, titleRootPage = true
 
     def File outFile
+
+	def File splitDir
+	int splitLevel = 0
 
     Confluence2MDArgsParser getArgsParser() {
         return new Confluence2MDArgsParser(this)
@@ -55,6 +59,38 @@ class Confluence2MD extends ConfluenceParser implements Walker {
             fillPageIdCache(page)
             log("Generating markdown")
             parsePages(page)
+
+			if (splitDir != null) {
+				outFile = new File(splitDir.getPath() + '/README.md')
+				out = new PrintStream(new FileOutputStream(outFile), false, "UTF-8")
+
+				writeRaw("${pageTitle(page.title)}\n")
+				writeRaw("=======\n")
+				parseBody(page.body.storage.value)
+        
+				withPages(page) { each ->
+					def effectiveLevel = effectiveLevel(1)
+
+					String url = pageIdCache.get(each.title)
+
+					if (effectiveLevel == 1) {
+						writeRaw("\n")
+						writeRaw("${pageTitle(each.title)}\n")
+						writeRaw("------------\n")
+						// Handled above
+					} else if (effectiveLevel <= topLevelDepth) {
+						writeRaw("\n")
+						writeRaw("${pageTitle(each.title)}\n")
+						writeRaw("------------\n")
+						writeRaw("\n")
+						writeRaw("* [Welcome](${url})\n")
+					} else if (effectiveLevel <= maxHeaderDepth) {
+						String spaces = StringUtils.repeat(" ", effectiveLevel - topLevelDepth - 1);
+						
+						writeRaw("${spaces}* [${pageTitle(each.title)}](${url})\n")
+					}
+				}
+			}
         } finally {
             close()
         }
@@ -64,29 +100,34 @@ class Confluence2MD extends ConfluenceParser implements Walker {
     Confluence2MD() {
         caching = true
 
+		int offset = 0;
+		if (splitDir != null) {
+			offset = -1;
+		}
+
         tagHandlers = [
-                "H1"                 : { node ->
-                    writeHeader(2, node)
+                "H1": { node ->
+                    writeHeader(2 + offset, node)
                     return true
                 },
-                "H2"                 : { node ->
-                    writeHeader(3, node)
+                "H2": { node ->
+                    writeHeader(3 + offset, node)
                     return true
                 },
-                "H3"                 : { node ->
-                    writeHeader(4, node)
+                "H3": { node ->
+                    writeHeader(4 + offset, node)
                     true
                 },
-                "H4"                 : { node ->
-                    writeHeader(5, node)
+                "H4": { node ->
+                    writeHeader(5 + offset, node)
                     true
                 },
-                "H5"                 : { node ->
-                    writeHeader(6, node)
+                "H5": { node ->
+                    writeHeader(6 + offset, node)
                     true
                 },
-                "H6"                 : { node ->
-                    writeHeader(7, node)
+                "H6": { node ->
+                    writeHeader(7 + offset, node)
                     true
                 },
                 "P"                  : { node ->
@@ -105,7 +146,7 @@ class Confluence2MD extends ConfluenceParser implements Walker {
                         writeRaw(label)
                         writeRaw("]")
                         writeRaw("(")
-                        def link = intoString { write(href as String) }
+                        def link = intoString { writeRaw(href as String) }
                         writeRaw(link)
                         writeRaw(")")
                         if (footnotes && label != link
@@ -144,7 +185,11 @@ class Confluence2MD extends ConfluenceParser implements Walker {
                         linkUrl = child.attributes()["ri:content-title"]
                         if (pageIdCache.get(linkUrl)) {
                             linkText = linkUrl
-                            linkUrl = "PAGE_" + pageIdCache.get(linkUrl)
+							if (splitDir != null) {
+								linkUrl = pageIdCache.get(linkUrl)
+							} else {
+	                            linkUrl = "PAGE_" + pageIdCache.get(linkUrl)
+							}
                         } else {
                             log("Link out of scope to page: \'$linkUrl\'")
                             linkText = linkUrl
@@ -169,7 +214,11 @@ class Confluence2MD extends ConfluenceParser implements Walker {
                     if (linkUrl) {
                         writeRaw("[")
                         write(linkText ?: linkUrl)
-                        writeRaw("](#")
+						if (splitDir != null) {
+							writeRaw("](")
+						} else {
+	                        writeRaw("](#")
+						}
                         writeRaw(linkUrl)
                         writeRaw(")")
                     } else if (linkText) {
@@ -349,13 +398,30 @@ class Confluence2MD extends ConfluenceParser implements Walker {
                         } else {
                             pageId = currentPage.id
                         }
-                        def attachments = pageId ? getAttachments(pageId) : null
-                        def attachment = findAttachmentTitled(attachments, fileName)
-                        if (!attachment) {
-                            log("WARN: Cannot find attachment $fileName")
-                        } else {
-                            url = downloadedFile(attachment).path
-                        }
+
+						try {
+							def attachments = pageId ? getAttachments(pageId) : null
+							def attachment = findAttachmentTitled(attachments, fileName)
+							if (!attachment) {
+								log("WARN: Cannot find attachment $fileName")
+							} else {
+								if (splitDir != null) {
+									String path = downloadedFile(attachment).path
+									url = path.replace(splitDir.path, "")
+								} else {
+									url = downloadedFile(attachment).path
+								}
+							}
+
+							if (url.charAt(0) == '/')
+							{
+								url = url.substring(1);
+							}
+						}
+						catch (Exception e)
+						{
+							log("WARN: Could not get attachments: " + e.getClass().toString() + ": " + e.getMessage())
+						}
                     } else {
                         child = getFirstChildNamed(node, "RI:URL")
                         if (child) { // image by URL
@@ -364,9 +430,9 @@ class Confluence2MD extends ConfluenceParser implements Walker {
                     }
                     assertBlankLine()
                     writeRaw("![")
-                    write(title ?: url)
+                    writeRaw(title ?: url)
                     writeRaw("](")
-                    write(url)
+                    writeRaw(url)
                     writeRaw(")\n")
                     return true
                 },
@@ -565,9 +631,19 @@ class Confluence2MD extends ConfluenceParser implements Walker {
 
     protected void handlePage(page) {
         if (depth > 0 || titleRootPage) {
-            writeHeader(1, {
-                write("${pageTitle(page.title)}")
-            }, "PAGE_${page.id}")
+			if (splitDir != null) {
+				String filename = page.title.replaceAll("[^a-zA-Z0-9.-]", "_") + ".md"
+
+				outFile = new File(splitDir.getPath() + '/' + filename)
+				out = new PrintStream(new FileOutputStream(outFile), false, "UTF-8")
+
+				writeRaw("${pageTitle(page.title)}\n")
+				writeRaw("======\n")
+			} else {
+				writeHeader(1, {
+					write("${pageTitle(page.title)}")
+				}, "PAGE_${page.id}")
+			}
         }
     }
 
@@ -584,7 +660,7 @@ class Confluence2MD extends ConfluenceParser implements Walker {
             def effectiveLevel = effectiveLevel(1)
             if (effectiveLevel <= maxHeaderDepth) {
                 log("${depth} - Found page $each.id '$each.title'")
-                pageIdCache.put(each.title, each.id)
+                pageIdCache.put(each.title, each.title.replaceAll("[^a-zA-Z0-9.-]", "_") + ".md")
             } else {
                 log(
                         "${depth} - Found page $each.id '${each.title}', but header depth $effectiveLevel is too deep in the hierachy")
@@ -806,5 +882,13 @@ class Confluence2MD extends ConfluenceParser implements Walker {
         super.close()
         if (out instanceof Closeable) out.close()
     }
+
+	File downloadedFile(def attachment) {
+		if (!downloadFolder.isAbsolute() && splitDir != null) {
+			downloadFolder = new File(splitDir.getPath() + "/" + downloadFolder.getPath())
+		}
+
+		return super.downloadedFile(attachment, false)
+	}
 
 }

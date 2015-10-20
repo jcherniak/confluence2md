@@ -248,9 +248,17 @@ abstract class ConfluenceParser implements NodeHandler {
         return attachments
     }
 
-    File downloadedFile(def attachment) {
+    File downloadedFile(def attachment, boolean includeTitle = true) {
         if (!downloadFolder.exists()) downloadFolder.mkdirs()
-        File targetFile = new File(downloadFolder, attachment.id + "_" + attachment.title)
+		
+		String filename = attachment.id
+		if (includeTitle) {
+			filename += "_" + attachment.title
+		} else {
+			filename += attachment.title.substring(attachment.title.lastIndexOf("."))
+		}
+
+        File targetFile = new File(downloadFolder, filename)
         if (caching && targetFile.exists()) { // speed up - use existing file
             log("Found downloaded file ${targetFile.name}")
         } else { // download and save
